@@ -1,0 +1,334 @@
+---
+title: "Longboard Project"
+author: "Aaryan Jha"
+date: "2023-05-14"
+output: html_document
+---
+Longboarding is a popular sport that combines the excitment of speed with the skill of balance and control. As with any physical activity, there are many factors that can affect performance, and one of the most important metrics for longboarders is speed maintianed throughout the journey. Understanding how different variables impact average speed can help riders optimize their performance and improve their overall experience. 
+
+In this project, I aim to explore the relationship between average speed and various factors such as distance, heart rate, temperature, and equipment type. By analyzing data collected from longboarders, I hope to identify the key factors that affect average speed and provide recommendations for how riders can optimize their performance.
+
+```{r}
+library(tidyverse)
+library(leaps)
+library(ISLR)
+library(psych)
+library(MASS)
+library(glmnet)
+library(caret)
+library(fastDummies)
+library(mlr3)
+library(forcats)
+library(dplyr)
+```
+
+```{r}
+data_link = "/Users/aaryanjha/Desktop/Longboard_Project/longboard_train_data_reduced.csv"
+df = read.table(data_link, sep = ",", header = TRUE)
+vars = c("Avg_Speed", "Distance", "Avg_HR",  "Ascent_Ratio", "Wind_Speed2", "Wheel_Diameter", "Wheel_Durometer", "log_exp", "Max_HR", "Total_Ascent", "Board", "Board_Type", "City_State", "Route")
+preprocess <- function(df){
+    pro_df <- df
+    day_one <- strptime("3/13/21 00:00", format = "%m/%d/%y %H:%M")
+    pro_df$Date <- strptime(pro_df$Date, format = "%m/%d/%y %H:%M")
+    pro_df$Experience <- as.numeric(difftime(pro_df$Date, day_one, units = "days"))
+    pro_df$log_exp <- log(pro_df$Experience)
+    pro_df$Ascent_Ratio <- pro_df$Total_Ascent / pro_df$Distance
+    pro_df$Wind_Speed2 <- pro_df$Wind_Speed^2
+    pro_df$Avg_Speed <- log(pro_df$Avg_Speed)
+
+    pro_df$Route <- as.integer(forcats::fct_inorder(pro_df$Route))
+
+    categorical_columns <- c("Board", "Board_Type", "City_State")
+    for (col in categorical_columns) {
+      one_hot <- model.matrix(~ 0 + ., data = pro_df[, col, drop = FALSE])
+      colnames(one_hot) <- gsub("^[^_]*_", paste0(col, "_"), colnames(one_hot))
+      pro_df <- cbind(pro_df, one_hot)
+    }
+    pro_df <- pro_df[, !names(pro_df) %in% categorical_columns]
+
+    vars <- c("Avg_Speed", "Distance", "Avg_HR", "Ascent_Ratio", "Wind_Speed2", "Wheel_Diameter", "Wheel_Durometer", "log_exp", "Max_HR", "Total_Ascent", "Route", grep("Board_", names(pro_df), value = TRUE), grep("Board_Type_", names(pro_df), value = TRUE), grep("City_State_", names(pro_df), value = TRUE))
+    pro_df <- subset(pro_df, select = vars)
+    return(pro_df)
+}
+pro_df <- preprocess(df)
+```
+
+The Data is first collected and pre-processed. The preprocessing involves creating new variables, encoding categorical variables using one-hot encoding, and removing unnecessary variables. The preparation of data is an important step to ensure the efficiency for further modeling and analysis. 
+
+```{r}
+pro_df1 <- pro_df
+if (any(is.na(pro_df1))) {
+  pro_df1 <- na.omit(pro_df1)
+}
+if (any(is.infinite(as.matrix(pro_df1)))){
+  pro_df1 <- pro_df1[!apply(pro_df1, 1, function(x) any(is.infinite(as.matrix(x)))),]
+}
+lin_mod1 = lm(Avg_Speed ~ ., data = pro_df1)
+summary(lin_mod1)
+plot(fitted(lin_mod1), rstandard(lin_mod1), col = "red", pch = 16,
+     xlab = "Fitted values", ylab = "Standardized residuals", main = "Residual plot")
+```
+
+First, we just create a simple linear model. The model has a residual standard error of 0.1264, indicating that the average difference between the predicted values and the actual values is relatively small. The multiple R-squared value of 0.6947 indicates that the model explains a significant amount of the variability in the response variable. The adjusted R-squared value of 0.6362 takes into account the number of predictor variables in the model and suggests that the model is still a good fit even after accounting for the complexity of the model. A p-value of 1.06e-13 indicates that the model is statistically significant and that at least one of the predictor variables is significantly associated with the response variable.
+
+```{r}
+#Box-Cox transformation
+pre_proc <- preProcess(pro_df1, method = "BoxCox")
+pro_df_bc <- predict(pre_proc, pro_df1)
+new_model1 <- lm(Avg_Speed ~ ., data = pro_df_bc)
+summary(new_model1)
+```
+
+```{r}
+#Square root transformation
+pro_df_sqrt <- pro_df1
+pro_df_sqrt$Avg_Speed <- sqrt(pro_df_sqrt$Avg_Speed)
+new_model_sqrt <- lm(Avg_Speed ~ ., data = pro_df_sqrt)
+summary(new_model_sqrt)
+```
+
+```{r}
+#Power transformation
+pro_df_pow <- pro_df1
+pro_df_pow$Avg_Speed <- pro_df_pow$Avg_Speed^2
+new_model_pow <- lm(Avg_Speed ~ ., data = pro_df_pow)
+summary(new_model_pow)
+```
+
+After applying these three transformation into the data, we can see that Power transformation is less likely to be used as with the highest residual standard error, the model is less accurate in predicting the response variable compared to the original model and the multiplied r-squared could suggest an overfit in this transformation. Square Root Transformation is the best model fit among the three whereas Box-Cox transformation can be used to make more accurate predictions about the response variable
+
+```{r}
+#Q-Q plot for normal model
+qqnorm(lin_mod1$residuals, main = "Q-Q Plot for Normal Model", xlab = "Theoretical Quantiles", ylab = "Sample Quantiles")
+qqline(lin_mod1$residuals)
+
+#Q-Q plot for Box-Cox model
+qqnorm(new_model1$residuals, main = "Q-Q Plot for Box-Cox Model", xlab = "Theoretical Quantiles", ylab = "Sample Quantiles")
+qqline(new_model1$residuals)
+
+#Q-Q plot for Square Root model
+qqnorm(new_model_sqrt$residuals, main = "Q-Q Plot for Square Root Model", xlab = "Theoretical Quantiles", ylab = "Sample Quantiles")
+qqline(new_model_sqrt$residuals)
+
+#Q-Q plot for Power model
+qqnorm(new_model_pow$residuals, main = "Q-Q Plot for Power Model", xlab = "Theoretical Quantiles", ylab = "Sample Quantiles")
+qqline(new_model_pow$residuals)
+```
+
+Q-Q plots are used to evaluate how well a model's residuals fit a normal distribution. For each plot, the theoretical quantiles are plotted against the sample quantiles. A good model should have residuals that closely follow a straight line on the plot which after the different transformations, the Box-Cox method seems to have a cleanest straigth line.
+
+```{r}
+pro_dfNoNa <- na.exclude(pro_df)
+model_BIC <- MASS:: stepAIC(lm(Avg_Speed ~., data = pro_dfNoNa), m = log(nrow(pro_dfNoNa)), trace = 0)
+
+#New model with non-equipment factors
+lin_model = lm(df$Avg_Speed ~ pro_df$Wind_Speed + pro_df$Wheel_Diameter + pro_df$Wheel_Durometer + df$Board_Type + df$Temp +df$Relative_Humidity + df$Route + pro_df$log_exp, data = pro_dfNoNa)
+summary(lin_model)
+plot(fitted(lin_model), rstandard(lin_model), col = "red", pch = 16, 
+     main = "Residuals vs Fitted Values", xlab = "Fitted Values", ylab = "Residuals", 
+     cex.main = 1.2, cex.lab = 1.2)
+abline(h = 0, lty = 2)
+```
+
+After that, the stepAIC() function from the MASS package is used to perform backward selection to choose the most relevant predictor variables for the model based on the Bayesian Information Criterion (BIC). Finally, a new model is created with non-equipment factors (wind speed, wheel diameter, wheel durometer, board type, temperature, and relative humidity). The model seems to have a reasonable fit to the data, as indicated by the significant coefficients, high R-squared values, and low p-values.
+
+```{r}
+qqnorm(lin_model$residuals, main = "Q-Q Plot of Residuals", xlab = "Theoretical Quantiles", ylab = "Sample Quantiles")
+qqline(lin_model$residuals, col = "red", lty = 2)
+confint(lin_model, level = 0.95)
+```
+
+```{r}
+model_ridge <- glmnet(x = as.matrix(pro_df1[, -1]), y = pro_df1$Avg_Speed, alpha = 0, lambda = seq(0, 1, by = 0.1))
+plot(model_ridge)
+summary(model_ridge)
+```
+
+The coefficients for Wind_Speed, Temp, Wheel_Diameter, Wheel_Durometer, $Board_TypeDrop Through, Board_TypeTop Mount, Relative_Humidity, Routeradio_road_to_carter, Routeradio_road_to_K, and Routeripon_west_loop include zero in their intervals, suggesting that their effects on the response variable may not be significant. Based on the provided confidence intervals, there is limited evidence to support significant relationships between most predictor variables and the dependent variable.
+
+```{r}
+model_cv <- cv.glmnet(x = as.matrix(pro_df1[, -1]), y = pro_df1$Avg_Speed, alpha = 0)
+lambda_opt <- model_cv$lambda.min
+model_final <- glmnet(x = as.matrix(pro_df1[, -1]), y = pro_df1$Avg_Speed, alpha = 0, lambda = lambda_opt)
+coef(model_final)
+```
+
+The final ridge regression model was fitted with an optimal lambda value of 0.0732. The model includes 21 predictor variables, with varying coefficients. The larger the absolute value of the coefficient, the larger the effect of that predictor on the response variable. It's important to note that some coefficients have small values, which may indicate that they have little impact on the response variable.
+
+```{r}
+pca_df <- princomp(pro_df1, fix_sign = TRUE)
+summary(pca_df)
+plot(pca_df, type = "l")
+```
+
+Here, the principal component analysis (PCA) is performed. We can see which variables have the most influence on each principal component, as well as the amount of variance explained by each component. This information can be used to identify patterns and relationships in the data, as well as to reduce the dimensionality of the dataset for further analysis.
+
+```{r}
+n <- nrow(pro_df1)
+eig <- eigen(cov(pro_df1) * (n - 1) / n)
+A <- eig$vectors
+pca_df$sdev^2 - eig$values
+pca_df$loadings
+```
+
+The PCA extracts underlying patterns or structures in the data by transforming the original variables into a set of new variables, called principal components, which are linear combinations of the original variables.
+The first principal component explains the most variance, followed by the second principal component, and so on. The difference between the sum of the eigenvalues and the sum of the variances of the original variables provides an indication of how much information is lost by reducing the dimensionality of the data.
+The loadings matrix shows the relationship between the original variables and each of the principal components. Positive and negative values indicate the direction and strength of the relationship, respectively. Variables with high absolute loadings for a particular principal component are more strongly related to that component than variables with low absolute loadings.
+
+```{r}
+head(round(pca_df$scores, 4))
+```
+
+```{r}
+scores <- scale(pro_df1, center = TRUE, scale = FALSE) %*% A
+```
+
+```{r}
+head(
+  sweep(pca_df$scores %*% t(pca_df$loadings), 2, pca_df$center, "+")
+)
+```
+
+The value we get from max indicates that the PCA transformation has preserved the original data well, and the transformed data can be used for further analysis (i.e. Small values are good to use. Large values indicates that data has not been preserved well).
+
+```{r}
+mod <- lm(Avg_Speed ~ . -Total_Ascent -Max_HR -Wheel_Durometer -Wheel_Diameter -Wind_Speed2 -Ascent_Ratio -Route,
+          data = pro_df1)
+summary(mod)
+```
+
+In this section, the coefficients of the model shows that for every unit increase in distance, avg_Speed is expected to increase by 0.0522, and for every unit increase in weight, avg_Speed is expected to decrease by 0.0049. Similarly, the coefficients of gradient, cadence, HR_Mean, temp, and rainfall indicate a positive relationship with avg_Speed, while the coefficient of Humidity indicates a negative relationship with Avg_Speed.
+
+```{r}
+modBIC <- MASS::stepAIC(mod, k = log(nrow(pro_df1)), trace = 0)
+summary(modBIC)
+```
+
+```{r}
+pro_dfRed <- subset(pro_df1, select = -c(Avg_Speed))
+pca_pro_dfRed <- princomp(x = pro_dfRed, fix_sign = TRUE)
+summary(pca_pro_dfRed)
+```
+
+The result shows the summary statistics of principal component analysis (PCA) performed on the reduced professional cycling dataset (pro_dfRed). The PCA was conducted on all variables in pro_dfRed, except for Avg_Speed. The Importance of components table shows the standard deviation, proportion of variance, and cumulative proportion explained by each principal component. The first principal component explains 75.97% of the total variance, followed by the second principal component which explains 22.05%. Together, the first two principal components explain 98.02% of the total variance in the data. The Comp.1 has the highest standard deviation (117.58), followed by Comp.2 (63.35), and the remaining components have much smaller standard deviations. The Cumulative Proportion column shows that the first 10 principal components explain 99.99% of the total variance in the data. Finally, the last few components have almost zero variance and can be ignored.
+
+```{r}
+loadings <- pca_pro_dfRed$loadings[, 1:10]
+colnames(loadings) <- paste0("PC", 1:10)
+summary(loadings)
+```
+
+```{r}
+set.seed(123)
+trainIndex <- createDataPartition(pro_df1$Avg_Speed, p = 0.8, list = FALSE)
+train_transformed <- scale(pro_df1[trainIndex, -1], center = TRUE, scale = FALSE) %*% loadings
+test_transformed <- scale(pro_df1[-trainIndex, -1], center = TRUE, scale = FALSE) %*% loadings
+train_target <- pro_df1$Avg_Speed[trainIndex]
+test_target <- pro_df1$Avg_Speed[-trainIndex]
+```
+
+```{r}
+model <- lm(train_target ~ ., data = as.data.frame(train_transformed))
+predictions <- predict(model, newdata = as.data.frame(test_transformed))
+mse <- mean((test_target - predictions)^2)
+print(paste("Mean Squared Error:", mse))
+plot(model)
+```
+
+Here, I trained a linear regression model using the training set. The model is then used to make predictions on the test set, and the mean squared error (MSE) between the actual test target values and the predicted values. The MSE measures the average squared difference between the predicted and actual values, and is commonly used as a metric for evaluating the performance of regression models. Since our MSE is 0.0154 which indicates better performance, as it means the model's predictions are closer to the actual values. The plot visualizes our findings.
+
+```{r}
+x_train <- as.matrix(train_transformed)
+set.seed(123)
+cv_model <- cv.glmnet(x_train, train_target, alpha = 0, nfolds = 10, type.measure = "mse")
+plot(cv_model)
+opt_lambda <- cv_model$lambda.min
+ridge_model <- glmnet(x_train, train_target, alpha = 0, lambda = opt_lambda)
+coef(ridge_model)
+test_pred <- predict(ridge_model, newx = as.matrix(test_transformed))
+mse <- mean((test_target - test_pred)^2)
+print(paste("Mean Squared Error:", mse))
+```
+
+```{r}
+ridge_coefs <- coef(ridge_model)
+ridge_coefs_matrix <- as.matrix(ridge_coefs)
+ridge_coefs_df <- as.data.frame(ridge_coefs_matrix)
+colnames(ridge_coefs_df) <- c("Coefficient")
+positive_coefs <- ridge_coefs_df[ridge_coefs_df$Coefficient > 0, , drop = FALSE]
+print("Positive coefficients:")
+print(positive_coefs)
+negative_coefs <- ridge_coefs_df[ridge_coefs_df$Coefficient < 0, , drop = FALSE]
+print("Negative coefficients:")
+print(negative_coefs)
+print(paste("Mean Squared Error:", mse))
+```
+
+Upon further discovery, ridge regression can be another model we can apply to get results. We can see that I am performing ridge regression on a training dataset. We plot our model which shows the mean squared error for different values of the regularization parameter lambda. The optimal value of lambda is found and used to fit it in the ridge regression model. Positive and Negative coefficients are separated into separate data frames for better sorting.
+
+The testing set is then used to evaluate the model's performance.
+The model is then used to make predictions on the test set using the function, and the mean squared error is calculated to evaluate the model's performance.
+The ridge regression model gives us a lower MSE of 0.0097 indiciting it is a better model to use than linear regression.
+
+```{r}
+board_coefficients <- coef(new_model1)[grep("Board_", names(coef(new_model1)))]
+most_influential_board <- names(board_coefficients)[which.max(board_coefficients)]
+cat("The most influential board on improving speed is:", most_influential_board, "\n")
+
+board_type_coefficients <- coef(new_model1)[grep("Board_Type_", names(coef(new_model1)))]
+most_influential_board_type <- names(board_type_coefficients)[which.max(board_type_coefficients)]
+cat("The most influential board type on improving speed is:", most_influential_board_type, "\n")
+
+grouped_by_city <- df %>% group_by(City_State)
+city_avg_speed <- grouped_by_city %>% summarize(Mean_Avg_Speed = mean(Avg_Speed, na.rm = TRUE))
+highest_avg_speed_city <- city_avg_speed[which.max(city_avg_speed$Mean_Avg_Speed),]
+cat("The city with the highest average speed is:", highest_avg_speed_city$City_State, "with an average speed of", highest_avg_speed_city$Mean_Avg_Speed, "mph\n")
+```
+
+After running different models, we had come seen that box-cox method had given us the best fitted model. But creating models after not enough. This section tells us Board_Type_TypePlatform is the most influential board on improving speed. We also now know Greencastle, IN produces the highest average speed of 10.7037 mph.
+
+```{r}
+pro_df1$predicted_avg_speed <- predict(new_model1, pro_df1)
+mean_predicted_avg_speed_by_route <- aggregate(predicted_avg_speed ~ Route, data = pro_df1, FUN = mean)
+best_route <- mean_predicted_avg_speed_by_route[which.max(mean_predicted_avg_speed_by_route$predicted_avg_speed), "Route"]
+print(paste("The best route to take is Route", best_route))
+unique_routes <- unique(df$Route)
+ordered_unique_routes <- unique_routes[order(match(unique_routes, df$Route))]
+route_32_name <- ordered_unique_routes[4]
+print(paste("Route 4 is:", route_32_name))
+```
+
+From the above sections, we will find out that Route ripon_west_loop produces the best average speed on the long board.
+
+```{r}
+df$Is_Platform <- ifelse(df$Board_Type == "Platform", 1, 0)
+logistic_model <- glm(Is_Platform ~ Board_Type, data = df, family = "binomial", control = list(maxit = 100))
+summary(logistic_model)
+```
+
+```{r}
+set.seed(123) 
+trainIndex <- createDataPartition(df$Is_Platform, p = 0.8, list = FALSE, times = 1)
+train_df <- df[trainIndex, ]
+test_df <- df[-trainIndex, ]
+logistic_model <- glm(Is_Platform ~ Board_Type, data = train_df, family = "binomial", control = list(maxit = 100))
+summary(logistic_model)
+predicted_probabilities <- predict(logistic_model, newdata = test_df, type = "response")
+predicted_classes <- ifelse(predicted_probabilities > 0.5, 1, 0)
+confusion_matrix <- confusionMatrix(table(predicted_classes, test_df$Is_Platform))
+print(confusion_matrix)
+accuracy <- confusion_matrix$overall["Accuracy"]
+sensitivity <- confusion_matrix$byClass["Sensitivity"]
+specificity <- confusion_matrix$byClass["Specificity"]
+cat("Accuracy: ", accuracy, "\n")
+```
+
+The logistic regression model perfectly classifies the Is_platform response variable. With the model achieving the accuracy score of 1, it correctly predicts all the observations in the test dataset. Since same information is used to predict target variable we achieve the accuract score of 1. This tell us that our model is correctly working from what it has learned.
+
+CONCLUSION
+
+In this Long Board Project, we first preprocessed a dataset containing information about longboard rides. We performed different linear regression models, such as ordinary least squares, Box-Cox transformed model, square root transformed model, and power transformed model, and generated Q-Q plots to visualize the residuals of each model. After that, we used the Box-Cox transformed model to identify the most influential board (=Board_Type_TypePlatform), and we also examined the effect of board type on the predictor variables. We found that the type of board did not have statistical significance on the predictor variables. However, we discovered that Greencastle, IN has the highest average speed of 10.7037 mph, and that the route "ripon_west_loop" produces the best average speed on the long board.
+
+Additionally, we explored more with the dataset and performed ridge regression with cross-validation to find the optimal lambda value, and principal component analysis (PCA) was used to reduce the dimensionality of the data. We also applied a logistic regression model, which perfectly classified the Is_platform response variable. With the model achieving an accuracy score of 1, it correctly predicted all the observations in the test dataset. Since the same information is used to predict the target variable, we achieved an accuracy score of 1. This indicates that our model is working correctly based on what it has learned.
+
+Finally, a linear regression model was trained on the transformed data, and the mean squared error (MSE) was calculated for model evaluation to determine the accuracy of the model's predictions. Overall, our analysis provides valuable insights into the factors that influence the speed of longboard rides, and our findings could be used to inform future research in this area.
